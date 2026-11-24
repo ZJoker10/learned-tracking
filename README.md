@@ -1,15 +1,31 @@
 # learned-tracking
 
-**Joint-space trajectory tracking on a planar two-link arm: analytic motion
-profiles vs. model-based control, benchmarked in MuJoCo — with a learned
-residual controller as the next milestone.**
+> **Classical control doesn't degrade under model error — it fails confidently.**
+> This repo measures that failure, and builds the learned residual meant to fix it.
 
 ![benchmark](results/baseline.png)
 
-Most robotics portfolios show a planner that works in the nominal case. This
-repo asks the harder question: *which controller survives when the model is
-wrong?* The answer changes with the failure mode, which is exactly why a
-learned residual policy is worth training.
+I benchmarked five analytic motion profiles against three controllers — PD,
+computed-torque (inverse-dynamics feedforward + PD), and time-varying LQR — on a
+planar two-link arm in MuJoCo, then injected the mismatches that break real
+robots: a 2 kg unmodelled payload, 25× friction, 10 ms of control latency.
+
+The result is not the one I expected:
+
+- **With a correct model, feedforward is everything.** Computed torque and LQR
+  are ~7× better than plain PD (6e-4 vs 4.4e-3 rad) at the same effort.
+  Classical control is hard to beat when you know the plant.
+- **A 2 kg unmodelled payload erases that entire advantage** — 55× worse,
+  landing at the same error as PD. The feedforward torque was confidently wrong,
+  and nothing in the controller noticed.
+- **10 ms of latency flips the ranking**, making LQR ~19× better than computed
+  torque: it is a closed-loop design, while PD and FF+PD chatter against the
+  delay and saturate the actuators for most of the move.
+
+No controller wins everywhere, and the failure isn't graceful degradation — it's
+a controller applying the wrong torque with full authority and no signal that
+anything is wrong. That gap is the target for a learned residual policy: don't
+replace the structure, learn the model error on top of it.
 
 ---
 
@@ -17,7 +33,7 @@ learned residual policy is worth training.
 
 | Layer | Implementation |
 |---|---|
-| Motion profiles | The five C++ planners from my ROS 2 package [`trajectory_control`](https://github.com/): trapezoidal, cubic, quintic, 7-phase S-curve, multi-segment. Vendored and exposed to Python via pybind11. |
+| Motion profiles | The five C++ planners from my ROS 2 package `trajectory_control`: trapezoidal, cubic, quintic, 7-phase S-curve, multi-segment. Vendored and exposed to Python via pybind11. |
 | Plant | MuJoCo planar 2-link arm, joint-torque control, inertial coupling, damping, friction, actuator limits, optional latency and sensor noise. |
 | Controllers | `pd` (no model), `ff_pd` (inverse-dynamics feedforward + PD), `lqr` (time-varying LQR from MuJoCo linearizations). |
 | Metrics | Position/velocity RMSE, max error, settling time, control effort, torque rate, jerk, real-time factor. |
@@ -66,25 +82,18 @@ control, 2 ms MuJoCo timestep. `settle 0.000` means the error never exceeded
 | combined | ff_pd | 0.0599 | 0.1549 | 1.6380 | 1.218 | 8.461 | 1366.8 | 41296.3 | 126x |
 | combined | lqr | 0.1097 | 0.2812 | 0.4818 | 1.218 | 2.257 | 72.6 | 521.2 | 39x |
 
-### What the numbers say
+### Reading the table
 
-1. **With a correct model, feedforward is everything.** `ff_pd` and `lqr` are
-   ~7× better than plain PD (6e-4 vs 4.4e-3 rad) at essentially the same
-   effort. Classical computed-torque control is hard to beat when you know
-   the plant.
-2. **An unmodelled 2 kg payload erases that advantage.** `ff_pd` goes from
-   6e-4 to 3.3e-2 rad — a 55× degradation — landing at the same error as PD.
-   The feedforward term is confidently wrong.
-3. **LQR is the most brittle to model error** (0.11 rad under payload): it
-   trusts the model twice, in the feedforward *and* in the feedback gains, and
-   in the combined case it visibly diverges at the end of the move.
-4. **Delay flips the ranking.** With 10 ms of latency, `lqr` is ~19× better
-   than `ff_pd` (1.6e-3 vs 3.0e-2 rad) because it is a closed-loop design;
-   PD and FF+PD chatter against the delay, saturating the ±12 Nm actuators for
-   most of the move.
-5. **No controller wins everywhere.** That gap — model-based precision when
-   the model is right, feedback robustness when it isn't — is the target for a
-   learned residual policy.
+| controller | strength | failure mode |
+|---|---|---|
+| `pd` | ignores the model entirely, so mismatch costs it little | 7× worse than model-based control when the model *is* right; chatters under 10 ms delay and saturates the ±12 Nm actuators for ~75% of the move |
+| `ff_pd` | best nominal accuracy (6e-4 rad) at low effort | the feedforward term is an open-loop assertion about the plant — a 2 kg payload makes it 55× worse without any warning |
+| `lqr` | best under delay (1.6e-3 vs 3.0e-2 rad), because feedback is designed for the closed loop | trusts the model twice (feedforward *and* gains); worst under payload mismatch (0.11 rad) and visibly diverges at the end of the combined move |
+
+The practical conclusion is a metric choice: **judge a controller by its worst
+case across conditions, not its mean.** Every entry in the table loses
+somewhere, which sets the bar for v0.2 — one policy that matches `ff_pd` on
+nominal *and* `lqr` on delay, with no per-condition model.
 
 ---
 
