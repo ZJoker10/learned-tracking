@@ -1,0 +1,31 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "learned-tracking"
+version = "0.1.0"
+description = "Benchmark of analytic, optimal-control and learned joint-space trajectory tracking on a MuJoCo arm"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Zeyad Kandil" }]
+dependencies = ["numpy>=1.24", "mujoco>=3.1"]
+
+[project.optional-dependencies]
+rl = ["torch>=2.2"]
+plot = ["matplotlib>=3.7"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lt = "learned_tracking.cli:main"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/learned_tracking"]
+cmake.version = ">=3.22"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
